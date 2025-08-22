@@ -1,4 +1,5 @@
 mod cli;
+pub use cli::Color;
 mod event_processor;
 mod event_processor_with_human_output;
 mod event_processor_with_json_output;

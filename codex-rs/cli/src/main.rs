@@ -76,6 +76,9 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
+
+    /// Manage and resume recorded Codex sessions.
+    Sessions(SessionsCli),
 }
 
 #[derive(Debug, Parser)]
@@ -212,6 +215,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
+        Some(Subcommand::Sessions(mut sessions_cli)) => {
+            prepend_config_flags(&mut sessions_cli.config_overrides, cli.config_overrides);
+            sessions::run_main(sessions_cli, codex_linux_sandbox_exe).await?;
+        }
     }
 
     Ok(())
@@ -233,3 +240,6 @@ fn print_completion(cmd: CompletionCommand) {
     let name = "codex";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
+
+mod sessions;
+use sessions::SessionsCli;
