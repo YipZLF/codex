@@ -42,7 +42,10 @@ struct SessionMetaWithGit {
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
-pub struct SessionStateSnapshot {}
+pub struct SessionStateSnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_response_id: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SavedSession {

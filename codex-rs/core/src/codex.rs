@@ -227,6 +227,7 @@ struct State {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
+    last_response_id: Option<String>,
 }
 
 /// Context for an initialized model agent
@@ -380,21 +381,26 @@ impl Session {
             session_id: Uuid,
             rollout_recorder: Option<RolloutRecorder>,
             restored_items: Option<Vec<ResponseItem>>,
+            restored_last_response_id: Option<String>,
         }
         let rollout_result = match rollout_res {
             Ok((session_id, maybe_saved, recorder)) => {
                 let restored_items: Option<Vec<ResponseItem>> =
-                    maybe_saved.and_then(|saved_session| {
+                    maybe_saved.as_ref().and_then(|saved_session| {
                         if saved_session.items.is_empty() {
                             None
                         } else {
-                            Some(saved_session.items)
+                            Some(saved_session.items.clone())
                         }
                     });
+                let restored_last_response_id = maybe_saved
+                    .as_ref()
+                    .and_then(|saved| saved.state.last_response_id.clone());
                 RolloutResult {
                     session_id,
                     rollout_recorder: Some(recorder),
                     restored_items,
+                    restored_last_response_id,
                 }
             }
             Err(e) => {
@@ -417,6 +423,7 @@ impl Session {
                     session_id: Uuid::new_v4(),
                     rollout_recorder: None,
                     restored_items: None,
+                    restored_last_response_id: None,
                 }
             }
         };
@@ -425,6 +432,7 @@ impl Session {
             session_id,
             rollout_recorder,
             restored_items,
+            restored_last_response_id,
         } = rollout_result;
 
         // Create the mutable state for the Session.
@@ -435,6 +443,11 @@ impl Session {
         if let Some(restored_items) = restored_items {
             state.history.record_items(&restored_items);
         }
+        // If resuming from an existing rollout, preserve last_response_id stored in snapshot.
+        state.last_response_id = config
+            .experimental_previous_response_id
+            .clone()
+            .or(restored_last_response_id);
 
         // Handle MCP manager result and record any startup failures.
         let (mcp_connection_manager, failed_clients) = match mcp_res {
@@ -634,7 +647,12 @@ impl Session {
     }
 
     async fn record_state_snapshot(&self, items: &[ResponseItem]) {
-        let snapshot = { crate::rollout::SessionStateSnapshot {} };
+        let snapshot = {
+            let st = self.state.lock_unchecked();
+            crate::rollout::SessionStateSnapshot {
+                last_response_id: st.last_response_id.clone(),
+            }
+        };
 
         let recorder = {
             let guard = self.rollout.lock_unchecked();
@@ -1494,6 +1512,11 @@ async fn run_turn(
     let prompt = Prompt {
         input,
         store: !turn_context.disable_response_storage,
+        previous_response_id: if !turn_context.disable_response_storage {
+            sess.state.lock_unchecked().last_response_id.clone()
+        } else {
+            None
+        },
         tools,
         base_instructions_override: turn_context.base_instructions.clone(),
     };
@@ -1653,9 +1676,16 @@ async fn try_run_turn(
                 output.push(ProcessedResponseItem { item, response });
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
+                // Track last_response_id so next turn can use previous_response_id.
+                {
+                    let mut st = sess.state.lock_unchecked();
+                    st.last_response_id = Some(response_id);
+                }
+                // Persist state snapshot (no additional items).
+                sess.record_state_snapshot(&[]).await;
                 if let Some(token_usage) = token_usage {
                     sess.tx_event
                         .send(Event {
@@ -1741,6 +1771,11 @@ async fn run_compact_task(
     let prompt = Prompt {
         input: turn_input,
         store: !turn_context.disable_response_storage,
+        previous_response_id: if !turn_context.disable_response_storage {
+            sess.state.lock_unchecked().last_response_id.clone()
+        } else {
+            None
+        },
         tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };

@@ -32,6 +32,11 @@ pub struct Prompt {
     /// Whether to store response on server side (disable_response_storage = !store).
     pub store: bool,
 
+    /// When using the Responses API with server-side storage enabled, this allows
+    /// resuming from a prior response without re-sending full context.
+    #[allow(dead_code)]
+    pub previous_response_id: Option<String>,
+
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
     pub tools: Vec<OpenAiTool>,
@@ -109,6 +114,8 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) previous_response_id: Option<String>,
 }
 
 pub(crate) fn create_reasoning_param_for_request(

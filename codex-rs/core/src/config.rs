@@ -156,6 +156,9 @@ pub struct Config {
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
 
+    /// Experimental: force the first turn to use this previous_response_id when `store=true`.
+    pub experimental_previous_response_id: Option<String>,
+
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
 
@@ -408,6 +411,9 @@ pub struct ConfigToml {
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
 
+    /// Experimental: force the first turn to use this previous_response_id when `store=true`.
+    pub experimental_previous_response_id: Option<String>,
+
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
 
@@ -612,6 +618,7 @@ impl Config {
         });
 
         let experimental_resume = cfg.experimental_resume;
+        let experimental_previous_response_id = cfg.experimental_previous_response_id.clone();
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -682,6 +689,7 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
+            experimental_previous_response_id,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool_val,
             responses_originator_header,
@@ -1046,6 +1054,7 @@ disable_response_storage = true
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
+                experimental_previous_response_id: None,
                 base_instructions: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
@@ -1099,6 +1108,7 @@ disable_response_storage = true
             model_reasoning_summary: ReasoningSummary::default(),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
+            experimental_previous_response_id: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -1167,6 +1177,7 @@ disable_response_storage = true
             model_reasoning_summary: ReasoningSummary::default(),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
+            experimental_previous_response_id: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
