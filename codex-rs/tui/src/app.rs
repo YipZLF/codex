@@ -347,15 +347,23 @@ impl App {
         let mut cfg = self.config.clone();
         cfg.experimental_resume = Some(rollout.clone());
         cfg.experimental_previous_response_id = at_id;
-        Some(ChatWidget::new(
+        let widget = ChatWidget::new(
             cfg,
             self.server.clone(),
             tui.frame_requester(),
             self.app_event_tx.clone(),
-            Some(prompt.to_string()),
+            if prompt.is_empty() {
+                None
+            } else {
+                Some(prompt.to_string())
+            },
             Vec::new(),
             self.enhanced_keys_supported,
-        ))
+        );
+
+        // Reconstruct transcript from rollout for UI context (user/assistant messages only).
+        self.replay_rollout_to_history(&rollout);
+        Some(widget)
     }
 
     fn try_branch(&self, target: &str, from: &str, name: &str) -> anyhow::Result<()> {
@@ -416,13 +424,15 @@ impl App {
                         if p.is_dir() {
                             stack.push(p);
                         } else if let Some(name) = p.file_name().and_then(|n| n.to_str())
-                            && name.starts_with("rollout-") && name.ends_with(".jsonl")
-                                && let Some(sid) = name
-                                    .strip_suffix(".jsonl")
-                                    .and_then(|stem| stem.rsplit('-').next())
-                                    && sid == target {
-                                        matches.push(p.clone());
-                                    }
+                            && name.starts_with("rollout-")
+                            && name.ends_with(".jsonl")
+                            && let Some(sid) = name
+                                .strip_suffix(".jsonl")
+                                .and_then(|stem| stem.rsplit('-').next())
+                            && sid == target
+                        {
+                            matches.push(p.clone());
+                        }
                     }
                 }
             }
@@ -443,14 +453,66 @@ impl App {
                     .get("last_response_id")
                     .or_else(|| v.get("state").and_then(|s| s.get("last_response_id")))
                     .and_then(|x| x.as_str())
-                {
-                    if ids.last().map(|s: &String| s == id).unwrap_or(false) {
-                        continue;
-                    }
-                    ids.push(id.to_string());
+            {
+                if ids.last().map(|s: &String| s == id).unwrap_or(false) {
+                    continue;
                 }
+                ids.push(id.to_string());
+            }
         }
         ids.get(step).cloned()
+    }
+
+    fn replay_rollout_to_history(&self, path: &std::path::Path) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        for line in text.lines() {
+            // Skip state lines
+            if line.contains("\"record_type\":\"state\"") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Some(typ) = v.get("type").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            if typ == "message" {
+                let role = v.get("role").and_then(|x| x.as_str()).unwrap_or("");
+                // content may be array of objects with text fields
+                let mut content = String::new();
+                if let Some(arr) = v.get("content").and_then(|x| x.as_array()) {
+                    for item in arr {
+                        if let Some(t) = item.get("text").and_then(|x| x.as_str()) {
+                            if !content.is_empty() {
+                                content.push('\n');
+                            }
+                            content.push_str(t);
+                        } else if let Some(c0) = item
+                            .get("content")
+                            .and_then(|c| c.get(0))
+                            .and_then(|x| x.get("text"))
+                            .and_then(|x| x.as_str())
+                        {
+                            if !content.is_empty() {
+                                content.push('\n');
+                            }
+                            content.push_str(c0);
+                        }
+                    }
+                }
+                if content.is_empty() {
+                    continue;
+                }
+                let cell: Box<dyn crate::history_cell::HistoryCell> = if role == "user" {
+                    Box::new(crate::history_cell::new_user_prompt(content))
+                } else {
+                    Box::new(crate::history_cell::new_assistant_message(content))
+                };
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+            }
+        }
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {

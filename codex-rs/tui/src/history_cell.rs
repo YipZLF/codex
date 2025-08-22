@@ -218,6 +218,14 @@ pub(crate) fn new_user_prompt(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_assistant_message(message: String) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from("assistant".magenta().bold()));
+    lines.extend(message.lines().map(|l| Line::from(l.to_string())));
+    lines.push(Line::from(""));
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_active_exec_command(
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
