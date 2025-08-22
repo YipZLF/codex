@@ -1032,7 +1032,11 @@ impl ChatWidget {
         let trimmed = raw.lines().next().unwrap_or("").trim();
         let mut out = trimmed.to_string();
         if out.len() > 80 {
-            out.truncate(80);
+            let mut cut = 80usize;
+            while cut > 0 && !out.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            out.truncate(cut);
             out.push('…');
         }
         out
