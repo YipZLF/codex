@@ -287,6 +287,9 @@ impl App {
                         }),
                     }));
                 }
+                SlashCommand::Resume => {
+                    self.chat_widget.open_resume_timeline();
+                }
             },
             AppEvent::ResumeRequest {
                 target,
@@ -294,13 +297,13 @@ impl App {
                 step,
                 prompt,
             } => {
+                // Clear inline chat viewport before switching sessions.
+                let _ = tui.clear_inline_view();
+                self.transcript_lines.clear();
                 if let Some(new_widget) = self.try_resume_chat(tui, &target, at, step, &prompt) {
                     self.chat_widget = new_widget;
                     tui.frame_requester().schedule_frame();
                 }
-            }
-            AppEvent::BranchRequest { target, from, name } => {
-                let _ = self.try_branch(&target, &from, &name);
             }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
@@ -366,43 +369,7 @@ impl App {
         Some(widget)
     }
 
-    fn try_branch(&self, target: &str, from: &str, name: &str) -> anyhow::Result<()> {
-        let rollout = self
-            .resolve_target_to_path(&self.config.codex_home, target)
-            .ok_or_else(|| anyhow::anyhow!("invalid target"))?;
-        let session_dir = rollout
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let meta_path = session_dir.join("resume-index.json");
-        let mut meta: serde_json::Value = if meta_path.exists() {
-            serde_json::from_str(&std::fs::read_to_string(&meta_path)?)
-                .unwrap_or_else(|_| serde_json::json!({}))
-        } else {
-            serde_json::json!({})
-        };
-        if meta.get("branches").is_none() {
-            meta["branches"] = serde_json::json!([]);
-        }
-        let branches = meta["branches"].as_array_mut().unwrap();
-        if branches
-            .iter()
-            .any(|b| b.get("name").and_then(|n| n.as_str()) == Some(name))
-        {
-            return Ok(());
-        }
-        let branch = serde_json::json!({
-            "branchId": format!("b_{}", rand::random::<u32>()),
-            "name": name,
-            "baseResponseId": from,
-            "tipResponseId": from,
-            "createdAt": chrono::Utc::now().to_rfc3339(),
-        });
-        branches.push(branch);
-        meta["head"] = serde_json::json!(name);
-        meta["updatedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
-        std::fs::write(meta_path, serde_json::to_string_pretty(&meta)?)?;
-        Ok(())
-    }
+    // Branch writer removed in TUI: branching occurs implicitly by resuming from an earlier step.
 
     fn resolve_target_to_path(
         &self,
@@ -480,6 +447,10 @@ impl App {
             };
             if typ == "message" {
                 let role = v.get("role").and_then(|x| x.as_str()).unwrap_or("");
+                // Only show end‑user roles. Hide system/developer/environment blocks.
+                if role != "user" && role != "assistant" {
+                    continue;
+                }
                 // content may be array of objects with text fields
                 let mut content = String::new();
                 if let Some(arr) = v.get("content").and_then(|x| x.as_array()) {

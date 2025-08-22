@@ -28,6 +28,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::slash_command::SlashCommand;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 
@@ -289,17 +290,29 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(cmd) = popup.selected_command() {
-                    // Send command to the app layer.
-                    self.app_event_tx.send(AppEvent::DispatchCommand(*cmd));
-
-                    // Clear textarea so no residual text remains.
-                    self.textarea.set_text("");
-
-                    // Hide popup since the command has been dispatched.
-                    self.active_popup = ActivePopup::None;
-                    return (InputResult::None, true);
+                    // Special-case slash commands that should trigger app-level handlers
+                    let first_line = self.textarea.text().lines().next().unwrap_or("").trim();
+                    match cmd {
+                        SlashCommand::Resume => {
+                            // Open the timeline view (parameters are selected interactively)
+                            let _ = first_line; // not used
+                            self.app_event_tx
+                                .send(AppEvent::DispatchCommand(SlashCommand::Resume));
+                            // Clear text and hide popup regardless of parse success
+                            self.textarea.set_text("");
+                            self.active_popup = ActivePopup::None;
+                            return (InputResult::None, true);
+                        }
+                        _ => {
+                            // Built-in command without arguments: dispatch as before
+                            self.app_event_tx.send(AppEvent::DispatchCommand(*cmd));
+                            self.textarea.set_text("");
+                            self.active_popup = ActivePopup::None;
+                            return (InputResult::None, true);
+                        }
+                    }
                 }
-                // Fallback to default newline handling if no command selected.
+                // Fallback到普通回车（当没有选中任何命令）：允许提交整行给上层（这会触发 ChatWidget 的自定义解析）
                 self.handle_key_event_without_popup(key_event)
             }
             input => self.handle_input_basic(input),

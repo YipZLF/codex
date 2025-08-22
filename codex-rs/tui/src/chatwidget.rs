@@ -643,7 +643,7 @@ impl ChatWidget {
         }
     }
 
-    /// Parse minimal `/resume` and `/branch` commands and forward to the app layer.
+    /// Parse minimal `/resume` command and forward to the app layer.
     fn try_handle_slash_command(&mut self, text: &str) -> bool {
         if !text.trim_start().starts_with('/') {
             return false;
@@ -686,29 +686,6 @@ impl ChatWidget {
                     prompt,
                 });
                 true
-            }
-            "/branch" => {
-                let target = match parts.next() {
-                    Some(t) => t,
-                    None => return false,
-                };
-                let mut from: Option<String> = None;
-                let mut name: Option<String> = None;
-                while let Some(tok) = parts.next() {
-                    if tok == "--from" {
-                        from = parts.next();
-                    } else if tok == "--name" {
-                        name = parts.next();
-                    }
-                }
-                match (from, name) {
-                    (Some(from), Some(name)) => {
-                        self.app_event_tx
-                            .send(AppEvent::BranchRequest { target, from, name });
-                        true
-                    }
-                    _ => false,
-                }
             }
             _ => false,
         }
@@ -796,6 +773,311 @@ impl ChatWidget {
             &self.total_token_usage,
             &self.session_id,
         ));
+    }
+
+    /// Open a timeline view to choose a session and step to resume from.
+    pub(crate) fn open_resume_timeline(&mut self) {
+        let items = self.collect_timeline_items();
+        if items.is_empty() {
+            // No sessions; add a hint to the history.
+            let mut lines = Vec::new();
+            lines.push(ratatui::text::Line::from(
+                "No sessions found under ~/.codex/sessions",
+            ));
+            lines.push(ratatui::text::Line::from(""));
+            self.add_to_history(crate::history_cell::PlainHistoryCell::from_lines(lines));
+            self.request_redraw();
+            return;
+        }
+        // Provide clearer navigation/help, including fast navigation keys.
+        self.bottom_pane.show_selection_view(
+            "Resume from a previous turn".to_string(),
+            Some(
+                "Sorted by time (newest first). Use ↑/↓; PgUp/PgDn/Home/End for fast navigation."
+                    .to_string(),
+            ),
+            Some("Press Enter to resume or Esc to cancel".to_string()),
+            items,
+        );
+    }
+
+    fn collect_timeline_items(&self) -> Vec<crate::bottom_pane::SelectionItem> {
+        use crate::bottom_pane::SelectionAction;
+        use crate::bottom_pane::SelectionItem;
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let base = self.config.codex_home.join("sessions");
+        let mut files = Vec::new();
+        self.collect_rollouts(&base, &mut files);
+
+        // Collect timeline entries across all sessions, then sort by timestamp desc
+        struct Entry {
+            sort_key: i64,
+            name: String,
+            description: Option<String>,
+            action: SelectionAction,
+            cwd_match: bool,
+        }
+
+        let mut entries: Vec<Entry> = Vec::new();
+        for f in files.into_iter() {
+            let session_id = Self::session_id_from_filename(&f).unwrap_or_else(|| "?".to_string());
+            let steps = Self::read_steps_from_rollout(&f);
+            let cwd = Self::extract_cwd_from_rollout(&f);
+            let cwd_short = cwd.as_deref().map(Self::shorten_path);
+            let cwd_match = cwd
+                .as_deref()
+                .map(|c| Self::paths_match(&self.config.cwd, c))
+                .unwrap_or(false);
+
+            for (idx, (ts, summary, sort_key)) in steps.into_iter().enumerate() {
+                let name = format!("{} [step {}]", &session_id, idx);
+                let mut desc_parts: Vec<String> = Vec::new();
+                if !ts.is_empty() {
+                    desc_parts.push(ts);
+                }
+                if let Some(c) = &cwd_short {
+                    desc_parts.push(format!("cwd: {}", c));
+                }
+                if !summary.is_empty() {
+                    desc_parts.push(summary);
+                }
+                let description = if desc_parts.is_empty() {
+                    None
+                } else {
+                    Some(desc_parts.join("  •  "))
+                };
+                let path_str = f.to_string_lossy().to_string();
+                let step_idx = idx;
+                let action: SelectionAction = Box::new(move |tx| {
+                    tx.send(crate::app_event::AppEvent::ResumeRequest {
+                        target: path_str.clone(),
+                        at: None,
+                        step: Some(step_idx),
+                        prompt: String::new(),
+                    });
+                });
+                entries.push(Entry {
+                    sort_key,
+                    name,
+                    description,
+                    action,
+                    cwd_match,
+                });
+            }
+        }
+
+        // Sort newest first; prioritize entries matching current cwd
+        entries.sort_by(|a, b| match b.cwd_match.cmp(&a.cwd_match) {
+            std::cmp::Ordering::Equal => b.sort_key.cmp(&a.sort_key),
+            other => other,
+        });
+
+        for e in entries.into_iter() {
+            items.push(SelectionItem {
+                name: e.name,
+                description: e.description,
+                is_current: false,
+                actions: vec![e.action],
+            });
+        }
+        items
+    }
+
+    fn collect_rollouts(&self, dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        if !dir.exists() {
+            return;
+        }
+        if let Ok(read) = std::fs::read_dir(dir) {
+            for e in read.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    self.collect_rollouts(&p, out);
+                } else if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                    && name.starts_with("rollout-")
+                    && name.ends_with(".jsonl")
+                {
+                    out.push(p);
+                }
+            }
+        }
+    }
+
+    fn session_id_from_filename(path: &std::path::Path) -> Option<String> {
+        let name = path.file_name()?.to_str()?;
+        let stem = name.strip_suffix(".jsonl")?;
+        let id = stem.rsplit('-').next()?;
+        Some(id.to_string())
+    }
+
+    /// Extract step metadata from a rollout file as (ts, summary, sort_key_ms).
+    /// For legacy sessions without state lines, synthesize a single entry using file mtime
+    /// and a brief summary from the last assistant/user message.
+    fn read_steps_from_rollout(path: &std::path::Path) -> Vec<(String, String, i64)> {
+        let mut steps: Vec<(String, String, i64)> = Vec::new();
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return steps;
+        };
+        let mut last_id: Option<String> = None;
+        for line in text.lines() {
+            if !line.contains("\"record_type\":\"state\"") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let id = v
+                .get("last_response_id")
+                .or_else(|| v.get("state").and_then(|s| s.get("last_response_id")))
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+            if id.is_some() && id != last_id {
+                let ts = v
+                    .get("created_at")
+                    .or_else(|| v.get("state").and_then(|s| s.get("created_at")))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let summary = v
+                    .get("summary")
+                    .or_else(|| v.get("state").and_then(|s| s.get("summary")))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let sort_key = chrono::DateTime::parse_from_rfc3339(&ts)
+                    .map(|dt| dt.timestamp_millis())
+                    .unwrap_or_else(|_| Self::file_mtime_ms(path));
+                steps.push((ts, summary, sort_key));
+                last_id = id;
+            }
+        }
+        if steps.is_empty() {
+            // Legacy fallback: synthesize one step when there are no state records.
+            let ts_display = Self::file_mtime_display(path);
+            let summary = Self::legacy_synthesize_summary_from_rollout(path);
+            let sort_key = Self::file_mtime_ms(path);
+            steps.push((ts_display, summary, sort_key));
+        }
+        steps
+    }
+
+    fn file_mtime_ms(path: &std::path::Path) -> i64 {
+        std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    }
+
+    fn file_mtime_display(path: &std::path::Path) -> String {
+        use chrono::DateTime;
+        use chrono::Local;
+        match std::fs::metadata(path).and_then(|m| m.modified()) {
+            Ok(sys_time) => DateTime::<Local>::from(sys_time)
+                .format("%Y-%m-%d %H:%M")
+                .to_string(),
+            Err(_) => String::new(),
+        }
+    }
+
+    fn legacy_synthesize_summary_from_rollout(path: &std::path::Path) -> String {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return String::new();
+        };
+        let mut last_user: Option<String> = None;
+        let mut last_assistant: Option<String> = None;
+        for line in text.lines() {
+            if line.contains("\"record_type\":\"state\"") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if v.get("type").and_then(|x| x.as_str()) != Some("message") {
+                continue;
+            }
+            let role = v.get("role").and_then(|x| x.as_str()).unwrap_or("");
+            // Extract text content
+            let mut content = String::new();
+            if let Some(arr) = v.get("content").and_then(|x| x.as_array()) {
+                for item in arr {
+                    if let Some(t) = item.get("text").and_then(|x| x.as_str()) {
+                        if !content.is_empty() {
+                            content.push('\n');
+                        }
+                        content.push_str(t);
+                    } else if let Some(c0) = item
+                        .get("content")
+                        .and_then(|c| c.get(0))
+                        .and_then(|x| x.get("text"))
+                        .and_then(|x| x.as_str())
+                    {
+                        if !content.is_empty() {
+                            content.push('\n');
+                        }
+                        content.push_str(c0);
+                    }
+                }
+            }
+            if content.trim().is_empty() {
+                continue;
+            }
+            if role == "assistant" {
+                last_assistant = Some(content);
+            } else if role == "user" {
+                last_user = Some(content);
+            }
+        }
+        let raw = last_assistant.or(last_user).unwrap_or_default();
+        let trimmed = raw.lines().next().unwrap_or("").trim();
+        let mut out = trimmed.to_string();
+        if out.len() > 80 {
+            out.truncate(80);
+            out.push('…');
+        }
+        out
+    }
+
+    fn extract_cwd_from_rollout(path: &std::path::Path) -> Option<String> {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return None;
+        };
+        for line in text.lines() {
+            if line.contains("\"record_type\":\"state\"") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let typ = v.get("type").and_then(|x| x.as_str());
+            if typ == Some("local_shell_call")
+                && let Some(action) = v.get("action").and_then(|x| x.get("exec"))
+                && let Some(cwd) = action.get("working_directory").and_then(|x| x.as_str())
+                && !cwd.is_empty()
+            {
+                return Some(cwd.to_string());
+            }
+        }
+        None
+    }
+
+    fn shorten_path(path: &str) -> String {
+        let p = std::path::Path::new(path);
+        let mut comps: Vec<&str> = p
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        if comps.len() <= 2 {
+            return comps.join("/");
+        }
+        comps.drain(..comps.len() - 2);
+        comps.join("/")
+    }
+
+    fn paths_match(current: &std::path::Path, other: &str) -> bool {
+        let other_path = std::path::Path::new(other);
+        // If either is a prefix of the other, treat as match.
+        current.starts_with(other_path) || other_path.starts_with(current)
     }
 
     /// Open a popup to choose the model preset (model + reasoning effort).

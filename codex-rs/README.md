@@ -94,3 +94,18 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
+### Resume and Rollback
+
+The Rust TUI provides a natural way to resume from previous sessions or roll
+back to earlier turns.
+
+- In the TUI, type `/resume` to open a timeline picker (no arguments needed).
+- Browse sessions/steps sorted by time, with fast navigation keys
+  (PageUp/PageDown/Home/End).
+- Selecting an entry clears the current view, replays prior user/assistant
+  messages for context, and resumes as a new session. Server-side chaining via
+  `previous_response_id` is used when available; older sessions fall back to
+  local replay.
+- Branching is implicit: resuming from an earlier step starts a new session.
+
+See the full guide in [`docs/codex_resume.md`](./docs/codex_resume.md).

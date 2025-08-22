@@ -115,6 +115,48 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Down,
                 ..
             } => self.move_down(),
+            // Fast navigation: page up/down and home/end
+            KeyEvent {
+                code: KeyCode::PageUp,
+                ..
+            } => {
+                let len = self.items.len();
+                let jump = MAX_POPUP_ROWS.min(len).max(1);
+                for _ in 0..jump {
+                    self.state.move_up_wrap(len);
+                }
+                self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
+            }
+            KeyEvent {
+                code: KeyCode::PageDown,
+                ..
+            } => {
+                let len = self.items.len();
+                let jump = MAX_POPUP_ROWS.min(len).max(1);
+                for _ in 0..jump {
+                    self.state.move_down_wrap(len);
+                }
+                self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
+            }
+            KeyEvent {
+                code: KeyCode::Home,
+                ..
+            } => {
+                if !self.items.is_empty() {
+                    self.state.selected_idx = Some(0);
+                }
+                self.state
+                    .ensure_visible(self.items.len(), MAX_POPUP_ROWS.min(self.items.len()));
+            }
+            KeyEvent {
+                code: KeyCode::End, ..
+            } => {
+                if !self.items.is_empty() {
+                    self.state.selected_idx = Some(self.items.len() - 1);
+                }
+                self.state
+                    .ensure_visible(self.items.len(), MAX_POPUP_ROWS.min(self.items.len()));
+            }
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => self.cancel(),

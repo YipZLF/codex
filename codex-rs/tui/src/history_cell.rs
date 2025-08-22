@@ -82,6 +82,12 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+impl PlainHistoryCell {
+    pub(crate) fn from_lines(lines: Vec<Line<'static>>) -> Self {
+        Self { lines }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct TranscriptOnlyHistoryCell {
     lines: Vec<Line<'static>>,

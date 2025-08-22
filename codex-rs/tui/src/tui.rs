@@ -254,6 +254,13 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    /// Clear the inline viewport area (does not modify scrollback). Use when switching sessions.
+    pub fn clear_inline_view(&mut self) -> Result<()> {
+        self.terminal.clear()?;
+        self.frame_requester().schedule_frame();
+        Ok(())
+    }
+
     pub fn draw(
         &mut self,
         height: u16,
