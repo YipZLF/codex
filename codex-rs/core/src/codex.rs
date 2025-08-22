@@ -651,6 +651,8 @@ impl Session {
             let st = self.state.lock_unchecked();
             crate::rollout::SessionStateSnapshot {
                 last_response_id: st.last_response_id.clone(),
+                created_at: None,
+                summary: None,
             }
         };
 
@@ -666,6 +668,34 @@ impl Session {
             if let Err(e) = rec.record_items(items).await {
                 error!("failed to record rollout items: {e:#}");
             }
+        }
+    }
+
+    async fn record_completed_state(&self, summary: Option<&str>) {
+        let snapshot = {
+            let st = self.state.lock_unchecked();
+            crate::rollout::SessionStateSnapshot {
+                last_response_id: st.last_response_id.clone(),
+                created_at: Some(chrono::Utc::now().to_rfc3339()),
+                summary: summary.map(|s| {
+                    let mut s = s.to_string();
+                    if s.len() > 200 {
+                        s.truncate(200);
+                    }
+                    s
+                }),
+            }
+        };
+
+        let recorder = {
+            let guard = self.rollout.lock_unchecked();
+            guard.as_ref().cloned()
+        };
+
+        if let Some(rec) = recorder
+            && let Err(e) = rec.record_state(snapshot).await
+        {
+            error!("failed to record rollout state: {e:#}");
         }
     }
 
@@ -1684,8 +1714,27 @@ async fn try_run_turn(
                     let mut st = sess.state.lock_unchecked();
                     st.last_response_id = Some(response_id);
                 }
-                // Persist state snapshot (no additional items).
-                sess.record_state_snapshot(&[]).await;
+                // Persist state snapshot with metadata (time + summary if available).
+                // Best-effort extraction of the last assistant message content from the
+                // items streamed so far in this turn.
+                let last_msg: Option<String> = {
+                    use crate::models::ContentItem;
+                    output.iter().rev().find_map(|p| match &p.item {
+                        ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                            let mut s = String::new();
+                            for c in content {
+                                match c {
+                                    ContentItem::OutputText { text }
+                                    | ContentItem::InputText { text } => s.push_str(text),
+                                    _ => {}
+                                }
+                            }
+                            if s.is_empty() { None } else { Some(s) }
+                        }
+                        _ => None,
+                    })
+                };
+                sess.record_completed_state(last_msg.as_deref()).await;
                 if let Some(token_usage) = token_usage {
                     sess.tx_event
                         .send(Event {

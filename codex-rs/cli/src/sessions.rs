@@ -54,6 +54,10 @@ pub struct ResumeArgs {
     #[arg(long = "at")]
     at: Option<String>,
 
+    /// Resume from the n-th recorded step (0-based). Internally resolves to a response id.
+    #[arg(long = "step")]
+    step: Option<usize>,
+
     /// Optional profile to apply
     #[arg(long = "profile", short = 'p')]
     profile: Option<String>,
@@ -120,13 +124,25 @@ async fn resume_session(
         ));
     }
 
+    // Optionally resolve --step to a response id by scanning the rollout file's state lines.
+    let mut at = args.at.clone();
+    if at.is_none()
+        && let Some(step) = args.step
+    {
+        if let Some(id) = resolve_step_to_response_id(&rollout_path, step)? {
+            at = Some(id);
+        } else {
+            anyhow::bail!(format!("No response id found at step {step}"));
+        }
+    }
+
     // Build an ExecCli with the resume override baked into -c.
     let mut raw_overrides = overrides.raw_overrides.clone();
     raw_overrides.push(format!(
         "experimental_resume=\"{}\"",
         rollout_path.to_string_lossy().replace('\\', "/")
     ));
-    if let Some(at) = &args.at {
+    if let Some(at) = &at {
         raw_overrides.push(format!("experimental_previous_response_id=\"{}\"", at));
     }
 
@@ -209,6 +225,28 @@ fn resolve_target_to_path(codex_home: &Path, target: &str) -> anyhow::Result<Pat
         .ok_or_else(|| anyhow::anyhow!(format!("No rollout found for session id: {target}")))
 }
 
+fn resolve_step_to_response_id(path: &Path, step: usize) -> anyhow::Result<Option<String>> {
+    let text = std::fs::read_to_string(path)?;
+    let mut ids = Vec::new();
+    for line in text.lines() {
+        if !line.contains("\"record_type\":\"state\"") {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(id) = v
+                .get("last_response_id")
+                .or_else(|| v.get("state").and_then(|s| s.get("last_response_id")))
+                .and_then(|x| x.as_str())
+        {
+            if ids.last().map(|s: &String| s == id).unwrap_or(false) {
+                continue;
+            }
+            ids.push(id.to_string());
+        }
+    }
+    Ok(ids.get(step).cloned())
+}
+
 #[derive(Debug, Parser)]
 pub struct ShowArgs {
     /// Session ID (UUID suffix) or path to a rollout .jsonl file
@@ -238,7 +276,21 @@ async fn show_session(overrides: CliConfigOverrides, args: ShowArgs) -> anyhow::
                     .as_ref()
                     .map(|s| if s.len() > 12 { &s[..12] } else { s })
                     .unwrap();
-                println!("  [{}] resp: {}", step, disp);
+                let ts = v
+                    .get("created_at")
+                    .or_else(|| v.get("state").and_then(|s| s.get("created_at")))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
+                let summary = v
+                    .get("summary")
+                    .or_else(|| v.get("state").and_then(|s| s.get("summary")))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
+                if ts.is_empty() && summary.is_empty() {
+                    println!("  [{}] resp: {}", step, disp);
+                } else {
+                    println!("  [{}] resp: {}  {}  {}", step, disp, ts, summary);
+                }
                 step += 1;
                 last_id = id;
             }

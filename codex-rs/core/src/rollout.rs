@@ -45,6 +45,10 @@ struct SessionMetaWithGit {
 pub struct SessionStateSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_response_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]

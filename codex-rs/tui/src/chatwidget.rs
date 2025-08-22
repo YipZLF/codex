@@ -574,7 +574,11 @@ impl ChatWidget {
 
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::Submitted(text) => {
-                self.submit_user_message(text.into());
+                if self.try_handle_slash_command(&text) {
+                    // handled by app via event
+                } else {
+                    self.submit_user_message(text.into());
+                }
             }
             InputResult::None => {}
         }
@@ -636,6 +640,77 @@ impl ChatWidget {
         // Only show the text portion in conversation history.
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text.clone()));
+        }
+    }
+
+    /// Parse minimal `/resume` and `/branch` commands and forward to the app layer.
+    fn try_handle_slash_command(&mut self, text: &str) -> bool {
+        if !text.trim_start().starts_with('/') {
+            return false;
+        }
+        let mut parts = shlex::Shlex::new(text.trim());
+        let cmd: String = parts.next().map(|s| s.to_string()).unwrap_or_default();
+        match cmd.as_str() {
+            "/resume" => {
+                let target = match parts.next() {
+                    Some(t) => t,
+                    None => return false,
+                };
+                let mut at: Option<String> = None;
+                let mut step: Option<usize> = None;
+                let mut prompt_tokens: Vec<String> = Vec::new();
+                while let Some(tok) = parts.next() {
+                    if tok == "--at" {
+                        if let Some(id) = parts.next() {
+                            at = Some(id);
+                        }
+                    } else if tok == "--step" {
+                        if let Some(n) = parts.next() {
+                            step = n.parse::<usize>().ok();
+                        }
+                    } else {
+                        prompt_tokens.push(tok);
+                        // drain rest into prompt
+                        prompt_tokens.extend(parts.by_ref());
+                        break;
+                    }
+                }
+                let prompt = prompt_tokens.join(" ");
+                if prompt.is_empty() {
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::ResumeRequest {
+                    target,
+                    at,
+                    step,
+                    prompt,
+                });
+                true
+            }
+            "/branch" => {
+                let target = match parts.next() {
+                    Some(t) => t,
+                    None => return false,
+                };
+                let mut from: Option<String> = None;
+                let mut name: Option<String> = None;
+                while let Some(tok) = parts.next() {
+                    if tok == "--from" {
+                        from = parts.next();
+                    } else if tok == "--name" {
+                        name = parts.next();
+                    }
+                }
+                match (from, name) {
+                    (Some(from), Some(name)) => {
+                        self.app_event_tx
+                            .send(AppEvent::BranchRequest { target, from, name });
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
         }
     }
 

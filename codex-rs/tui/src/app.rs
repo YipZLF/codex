@@ -288,6 +288,20 @@ impl App {
                     }));
                 }
             },
+            AppEvent::ResumeRequest {
+                target,
+                at,
+                step,
+                prompt,
+            } => {
+                if let Some(new_widget) = self.try_resume_chat(tui, &target, at, step, &prompt) {
+                    self.chat_widget = new_widget;
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            AppEvent::BranchRequest { target, from, name } => {
+                let _ = self.try_branch(&target, &from, &name);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -314,6 +328,129 @@ impl App {
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage().clone()
+    }
+
+    fn try_resume_chat(
+        &mut self,
+        tui: &mut tui::Tui,
+        target: &str,
+        at: Option<String>,
+        step: Option<usize>,
+        prompt: &str,
+    ) -> Option<ChatWidget> {
+        let rollout = self.resolve_target_to_path(&self.config.codex_home, target)?;
+        let at_id = match (at, step) {
+            (Some(id), _) => Some(id),
+            (None, Some(n)) => self.resolve_step_to_response_id(&rollout, n),
+            _ => None,
+        };
+        let mut cfg = self.config.clone();
+        cfg.experimental_resume = Some(rollout.clone());
+        cfg.experimental_previous_response_id = at_id;
+        Some(ChatWidget::new(
+            cfg,
+            self.server.clone(),
+            tui.frame_requester(),
+            self.app_event_tx.clone(),
+            Some(prompt.to_string()),
+            Vec::new(),
+            self.enhanced_keys_supported,
+        ))
+    }
+
+    fn try_branch(&self, target: &str, from: &str, name: &str) -> anyhow::Result<()> {
+        let rollout = self
+            .resolve_target_to_path(&self.config.codex_home, target)
+            .ok_or_else(|| anyhow::anyhow!("invalid target"))?;
+        let session_dir = rollout
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let meta_path = session_dir.join("resume-index.json");
+        let mut meta: serde_json::Value = if meta_path.exists() {
+            serde_json::from_str(&std::fs::read_to_string(&meta_path)?)
+                .unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        if meta.get("branches").is_none() {
+            meta["branches"] = serde_json::json!([]);
+        }
+        let branches = meta["branches"].as_array_mut().unwrap();
+        if branches
+            .iter()
+            .any(|b| b.get("name").and_then(|n| n.as_str()) == Some(name))
+        {
+            return Ok(());
+        }
+        let branch = serde_json::json!({
+            "branchId": format!("b_{}", rand::random::<u32>()),
+            "name": name,
+            "baseResponseId": from,
+            "tipResponseId": from,
+            "createdAt": chrono::Utc::now().to_rfc3339(),
+        });
+        branches.push(branch);
+        meta["head"] = serde_json::json!(name);
+        meta["updatedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+        std::fs::write(meta_path, serde_json::to_string_pretty(&meta)?)?;
+        Ok(())
+    }
+
+    fn resolve_target_to_path(
+        &self,
+        codex_home: &std::path::Path,
+        target: &str,
+    ) -> Option<std::path::PathBuf> {
+        let as_path = std::path::PathBuf::from(target);
+        if as_path.exists() {
+            return Some(as_path);
+        }
+        let base = codex_home.join("sessions");
+        let mut matches = Vec::new();
+        if base.exists() {
+            let mut stack = vec![base.clone()];
+            while let Some(dir) = stack.pop() {
+                if let Ok(read) = std::fs::read_dir(&dir) {
+                    for e in read.flatten() {
+                        let p = e.path();
+                        if p.is_dir() {
+                            stack.push(p);
+                        } else if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                            && name.starts_with("rollout-") && name.ends_with(".jsonl")
+                                && let Some(sid) = name
+                                    .strip_suffix(".jsonl")
+                                    .and_then(|stem| stem.rsplit('-').next())
+                                    && sid == target {
+                                        matches.push(p.clone());
+                                    }
+                    }
+                }
+            }
+        }
+        matches.sort();
+        matches.pop()
+    }
+
+    fn resolve_step_to_response_id(&self, path: &std::path::Path, step: usize) -> Option<String> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let mut ids = Vec::new();
+        for line in text.lines() {
+            if !line.contains("\"record_type\":\"state\"") {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+                && let Some(id) = v
+                    .get("last_response_id")
+                    .or_else(|| v.get("state").and_then(|s| s.get("last_response_id")))
+                    .and_then(|x| x.as_str())
+                {
+                    if ids.last().map(|s: &String| s == id).unwrap_or(false) {
+                        continue;
+                    }
+                    ids.push(id.to_string());
+                }
+        }
+        ids.get(step).cloned()
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
