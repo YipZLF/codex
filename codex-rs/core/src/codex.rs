@@ -514,8 +514,10 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         });
 
-        // record the initial user instructions and environment context,
-        // regardless of whether we restored items.
+        // Seed conversation history with initial user instructions and environment context
+        // for model input construction, but do not persist these to the rollout file.
+        // The rollout is used to reconstruct the end‑user transcript; internal context
+        // such as <user_instructions> and <environment_context> should not appear there.
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
@@ -526,7 +528,11 @@ impl Session {
             Some(turn_context.sandbox_policy.clone()),
             Some(sess.user_shell.clone()),
         )));
-        sess.record_conversation_items(&conversation_items).await;
+        {
+            let mut st = sess.state.lock_unchecked();
+            // Record to in‑memory history only; skip rollout persistence here.
+            st.history.record_items(conversation_items.iter());
+        }
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         let events = std::iter::once(Event {
@@ -641,12 +647,14 @@ impl Session {
     /// transcript, if enabled.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
         debug!("Recording items for conversation: {items:?}");
-        self.record_state_snapshot(items).await;
+        // Persist filtered items to rollout (exclude internal context messages),
+        // while keeping the full items in in‑memory history so the model sees them.
+        self.record_state_snapshot_with_filter(items).await;
 
         self.state.lock_unchecked().history.record_items(items);
     }
 
-    async fn record_state_snapshot(&self, items: &[ResponseItem]) {
+    async fn record_state_snapshot_with_filter(&self, items: &[ResponseItem]) {
         let snapshot = {
             let st = self.state.lock_unchecked();
             crate::rollout::SessionStateSnapshot {
@@ -665,9 +673,34 @@ impl Session {
             if let Err(e) = rec.record_state(snapshot).await {
                 error!("failed to record rollout state: {e:#}");
             }
-            if let Err(e) = rec.record_items(items).await {
+            // Filter out internal context messages from rollout persistence.
+            let filtered: Vec<ResponseItem> = items
+                .iter()
+                .filter(|it| !Self::is_internal_context_message(it))
+                .cloned()
+                .collect();
+            if let Err(e) = rec.record_items(&filtered).await {
                 error!("failed to record rollout items: {e:#}");
             }
+        }
+    }
+
+    /// Identify internal user messages that are used to pass context to the model but should
+    /// not appear in the persisted rollout or end‑user transcript.
+    fn is_internal_context_message(item: &ResponseItem) -> bool {
+        match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                let mut buf = String::new();
+                for c in content {
+                    match c {
+                        crate::models::ContentItem::InputText { text }
+                        | crate::models::ContentItem::OutputText { text } => buf.push_str(text),
+                        _ => {}
+                    }
+                }
+                buf.contains("<user_instructions>") || buf.contains("<environment_context>")
+            }
+            _ => false,
         }
     }
 
@@ -1370,6 +1403,8 @@ async fn run_task(
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
+        // Record pending input for in‑memory history to preserve model context,
+        // but filter internal context messages from rollout persistence.
         sess.record_conversation_items(&pending_input).await;
 
         // Construct the input that we will send to the model. When using the
