@@ -60,4 +60,12 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+
+    /// Bind address for an embedded MCP server (e.g., tcp://127.0.0.1:6006 or unix:///tmp/codex.sock).
+    #[arg(long = "mcp-bind")]
+    pub mcp_bind: Option<String>,
+
+    /// Optional shared secret/token for embedded MCP server (not enforced yet; reserved).
+    #[arg(long = "mcp-auth")]
+    pub mcp_auth: Option<String>,
 }

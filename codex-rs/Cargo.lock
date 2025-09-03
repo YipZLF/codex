@@ -966,6 +966,7 @@ dependencies = [
  "codex-core",
  "codex-file-search",
  "codex-login",
+ "codex-mcp-server",
  "codex-ollama",
  "codex-protocol",
  "color-eyre",
