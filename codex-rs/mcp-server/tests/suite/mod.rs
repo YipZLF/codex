@@ -1,5 +1,6 @@
 // Aggregates all former standalone integration tests as modules.
 mod auth;
+mod codex_control_tools;
 mod codex_message_processor_flow;
 mod codex_tool;
 mod config;
@@ -7,4 +8,3 @@ mod create_conversation;
 mod interrupt;
 mod login;
 mod send_message;
-mod codex_control_tools;

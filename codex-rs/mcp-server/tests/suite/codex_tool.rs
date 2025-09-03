@@ -150,7 +150,10 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     );
     // structured_content may include session_id
     if let Some(sc) = result.get("structured_content") {
-        assert!(sc.get("session_id").is_some(), "expected session_id in structured_content");
+        assert!(
+            sc.get("session_id").is_some(),
+            "expected session_id in structured_content"
+        );
     }
 
     assert!(created_file.is_file(), "created file should exist");
@@ -285,7 +288,10 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         Some(&json!([{ "text": "Patch has been applied successfully!", "type": "text" }]))
     );
     if let Some(sc) = result.get("structured_content") {
-        assert!(sc.get("session_id").is_some(), "expected session_id in structured_content");
+        assert!(
+            sc.get("session_id").is_some(),
+            "expected session_id in structured_content"
+        );
     }
 
     let file_contents = std::fs::read_to_string(test_file.as_path())?;

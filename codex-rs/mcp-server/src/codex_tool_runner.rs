@@ -236,9 +236,11 @@ async fn run_codex_tool_session_inner(
                                 annotations: None,
                             })],
                             is_error: None,
-                            structured_content: session_id.map(|sid| serde_json::json!({
-                                "session_id": sid,
-                            })),
+                            structured_content: session_id.map(|sid| {
+                                serde_json::json!({
+                                    "session_id": sid,
+                                })
+                            }),
                         };
                         outgoing.send_response(request_id.clone(), result).await;
                         // unregister the id so we don't keep it in the map

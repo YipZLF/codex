@@ -38,6 +38,7 @@ codex-file-search = { path = "../file-search" }
 codex-login = { path = "../login" }
 codex-ollama = { path = "../ollama" }
 codex-protocol = { path = "../protocol" }
+codex-mcp-server = { path = "../mcp-server" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = [
     "bracketed-paste",

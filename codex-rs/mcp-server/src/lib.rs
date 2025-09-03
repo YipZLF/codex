@@ -40,6 +40,7 @@ pub use crate::exec_approval::ExecApprovalElicitRequestParams;
 pub use crate::exec_approval::ExecApprovalResponse;
 pub use crate::patch_approval::PatchApprovalElicitRequestParams;
 pub use crate::patch_approval::PatchApprovalResponse;
+pub mod embedded;
 
 /// Size of the bounded channels used to communicate between tasks. The value
 /// is a balance between throughput and memory usage – 128 messages should be
@@ -96,14 +97,38 @@ pub async fn run_main(
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
+    let config = std::sync::Arc::new(config);
+
+    // Shared ConversationManager so that optional TCP and stdio share sessions.
+    let auth_manager =
+        codex_login::AuthManager::shared(config.codex_home.clone(), config.preferred_auth_method);
+    let conversation_manager =
+        std::sync::Arc::new(codex_core::ConversationManager::new(auth_manager.clone()));
+
+    // Optional TCP listener from config.mcp_server.bind
+    if let Some(bind) = &config.mcp_service.bind {
+        if !bind.trim().is_empty() {
+            let addr = bind
+                .strip_prefix("tcp://")
+                .unwrap_or(bind.as_str())
+                .to_string();
+            let cm = conversation_manager.clone();
+            let cfg = config.clone();
+            let exe = codex_linux_sandbox_exe.clone();
+            tokio::spawn(async move {
+                let _ = crate::embedded::serve_tcp(&addr, cm, exe, cfg).await;
+            });
+        }
+    }
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
-        let mut processor = MessageProcessor::new(
+        let mut processor = MessageProcessor::with_conversation_manager(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
-            std::sync::Arc::new(config),
+            config.clone(),
+            conversation_manager.clone(),
         );
         async move {
             while let Some(msg) = incoming_rx.recv().await {

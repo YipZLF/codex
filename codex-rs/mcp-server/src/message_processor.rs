@@ -76,6 +76,36 @@ impl MessageProcessor {
         }
     }
 
+    /// Create a `MessageProcessor` that reuses an externally provided
+    /// `ConversationManager`. This is intended for the embedded‑MCP use case
+    /// (e.g., TUI + MCP in the same process) so both UI and MCP control the
+    /// same set of conversations.
+    pub(crate) fn with_conversation_manager(
+        outgoing: OutgoingMessageSender,
+        codex_linux_sandbox_exe: Option<PathBuf>,
+        config: Arc<Config>,
+        conversation_manager: Arc<ConversationManager>,
+    ) -> Self {
+        let outgoing = Arc::new(outgoing);
+        let auth_manager =
+            AuthManager::shared(config.codex_home.clone(), config.preferred_auth_method);
+        let codex_message_processor = CodexMessageProcessor::new(
+            auth_manager,
+            conversation_manager.clone(),
+            outgoing.clone(),
+            codex_linux_sandbox_exe.clone(),
+            config,
+        );
+        Self {
+            codex_message_processor,
+            outgoing,
+            initialized: false,
+            codex_linux_sandbox_exe,
+            conversation_manager,
+            running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
         if let Ok(request_json) = serde_json::to_value(request.clone())
             && let Ok(codex_request) = serde_json::from_value::<ClientRequest>(request_json)

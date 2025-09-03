@@ -71,6 +71,22 @@ impl App {
 
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
+        // If configured, start an embedded MCP TCP service that shares the same ConversationManager
+        // so that TCP tool calls are reflected in the running TUI session.
+        if let Some(bind) = &config.mcp_service.bind {
+            if !bind.trim().is_empty() {
+                let addr = bind
+                    .strip_prefix("tcp://")
+                    .unwrap_or(bind.as_str())
+                    .to_string();
+                let cm = conversation_manager.clone();
+                let cfg = std::sync::Arc::new(config.clone());
+                tokio::spawn(async move {
+                    let _ = codex_mcp_server::embedded::serve_tcp(&addr, cm, None, cfg).await;
+                });
+            }
+        }
+
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
         let chat_widget = match resume_selection {

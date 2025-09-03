@@ -283,7 +283,8 @@ impl McpProcess {
 
     /// Send a `tools/list` request.
     pub async fn send_list_tools_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request(mcp_types::ListToolsRequest::METHOD, None).await
+        self.send_request(mcp_types::ListToolsRequest::METHOD, None)
+            .await
     }
 
     /// Send a `tools/call` request for an arbitrary tool name and arguments.

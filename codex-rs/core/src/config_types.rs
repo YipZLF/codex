@@ -76,6 +76,18 @@ pub enum HistoryPersistence {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {}
 
+/// Settings that control Codex acting as an MCP service (transport/listener).
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct McpService {
+    /// Bind address for TCP listener (e.g., "tcp://127.0.0.1:6006" or "127.0.0.1:6006").
+    #[serde(default)]
+    pub bind: Option<String>,
+
+    /// Optional shared secret/token (reserved; not enforced yet).
+    #[serde(default)]
+    pub auth: Option<String>,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]

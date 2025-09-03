@@ -1,6 +1,7 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::McpService;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
@@ -135,6 +136,9 @@ pub struct Config {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Tui,
+
+    /// MCP server settings (transport/listener), shared by TUI embedding and standalone MCP server.
+    pub mcp_service: McpService,
 
     /// Path to the `codex-linux-sandbox` executable. This must be set if
     /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
@@ -456,6 +460,9 @@ pub struct ConfigToml {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
+
+    /// MCP server settings (transport/listener).
+    pub mcp_service: Option<McpService>,
 
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
@@ -779,6 +786,7 @@ impl Config {
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
+            mcp_service: cfg.mcp_service.unwrap_or_default(),
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
@@ -1233,7 +1241,8 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
-            tui: Tui::default(),
+            tui: cfg.tui.unwrap_or_default(),
+            mcp_service: cfg.mcp_service.unwrap_or_default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,

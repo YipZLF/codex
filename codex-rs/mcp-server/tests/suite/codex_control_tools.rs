@@ -3,7 +3,10 @@ use std::time::Duration;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
-use mcp_types::{JSONRPCNotification, JSONRPCResponse, RequestId, JSONRPC_VERSION};
+use mcp_types::JSONRPC_VERSION;
+use mcp_types::JSONRPCNotification;
+use mcp_types::JSONRPCResponse;
+use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -77,10 +80,7 @@ stream_max_retries = 0
 
     // 2) Query status
     let status_id = mcp
-        .send_call_tool_request(
-            "codex-status",
-            json!({ "sessionId": session_id }),
-        )
+        .send_call_tool_request("codex-status", json!({ "sessionId": session_id }))
         .await
         .unwrap();
     let status_resp: JSONRPCResponse = timeout(
@@ -136,7 +136,10 @@ async fn read_session_configured_session_id(mcp: &mut McpProcess) -> Option<Stri
             .await
             .ok()?;
         if let Some(p) = notification.params {
-            let event_type = p.get("msg").and_then(|m| m.get("type")).and_then(|t| t.as_str());
+            let event_type = p
+                .get("msg")
+                .and_then(|m| m.get("type"))
+                .and_then(|t| t.as_str());
             if event_type == Some("session_configured") {
                 if let Some(sid) = p
                     .get("msg")
