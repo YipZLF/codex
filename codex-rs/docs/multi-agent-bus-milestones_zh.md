@@ -36,6 +36,9 @@
 - mcp-server：抽象“传输层”与“会话提供者”，支持注入外部 Session。
 - 验收：带 TUI 场景仍可由外部 mcp-client 调用 codex.* 工具；UI 与外部控制操纵同一会话，互不冲突。
 
+可选 TODO（待后续评估）：
+- 在 `codex` 工具的 tools/call 响应中，除最终文本外，追加 `structured_content` 返回 `session_id`，作为对 `session_configured` 通知携带 session_id 的补充，方便部分客户端不订阅通知也能直接获取会话标识。
+
 ---
 
 ## 里程碑 M3：Bus MVP（独立模块）（5–7 天）
@@ -118,4 +121,3 @@
 
 - 先内聚 Codex 侧（M1/M2），再做 Bus MVP（M3），最后扩展跨机与可靠性（M5/M6）。
 - 每个里程碑具备可演示的最小路径（demo 命令/脚本）。
-
