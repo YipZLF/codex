@@ -220,6 +220,131 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
     }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// M1: Additional Codex control tools
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexToolCallInjectParam {
+    pub session_id: String,
+    /// Text to inject as input (appended to current task if running, otherwise starts a new turn).
+    pub prompt: String,
+}
+
+pub(crate) fn create_tool_for_codex_tool_call_inject_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<CodexToolCallInjectParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value =
+        serde_json::to_value(&schema).expect("Codex inject tool schema should serialise to JSON");
+
+    let tool_input_schema = serde_json::from_value::<ToolInputSchema>(schema_value)
+        .unwrap_or_else(|e| panic!("failed to create Tool from schema: {e}"));
+
+    Tool {
+        name: "codex-inject".to_string(),
+        title: Some("Codex Inject".to_string()),
+        input_schema: tool_input_schema,
+        output_schema: None,
+        description: Some(
+            "Inject user input into a running Codex session; starts a new turn if idle."
+                .to_string(),
+        ),
+        annotations: None,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexToolCallSessionOnlyParam {
+    pub session_id: String,
+}
+
+pub(crate) fn create_tool_for_codex_tool_call_interrupt_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<CodexToolCallSessionOnlyParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value = serde_json::to_value(&schema)
+        .expect("Codex interrupt tool schema should serialise to JSON");
+
+    let tool_input_schema = serde_json::from_value::<ToolInputSchema>(schema_value)
+        .unwrap_or_else(|e| panic!("failed to create Tool from schema: {e}"));
+
+    Tool {
+        name: "codex-interrupt".to_string(),
+        title: Some("Codex Interrupt".to_string()),
+        input_schema: tool_input_schema,
+        output_schema: None,
+        description: Some("Interrupt the running task of a Codex session.".to_string()),
+        annotations: None,
+    }
+}
+
+pub(crate) fn create_tool_for_codex_tool_call_shutdown_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<CodexToolCallSessionOnlyParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value =
+        serde_json::to_value(&schema).expect("Codex shutdown tool schema should serialise to JSON");
+
+    let tool_input_schema = serde_json::from_value::<ToolInputSchema>(schema_value)
+        .unwrap_or_else(|e| panic!("failed to create Tool from schema: {e}"));
+
+    Tool {
+        name: "codex-shutdown".to_string(),
+        title: Some("Codex Shutdown".to_string()),
+        input_schema: tool_input_schema,
+        output_schema: None,
+        description: Some("Shutdown a Codex session.".to_string()),
+        annotations: None,
+    }
+}
+
+pub(crate) fn create_tool_for_codex_tool_call_status_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<CodexToolCallSessionOnlyParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value =
+        serde_json::to_value(&schema).expect("Codex status tool schema should serialise to JSON");
+
+    let tool_input_schema = serde_json::from_value::<ToolInputSchema>(schema_value)
+        .unwrap_or_else(|e| panic!("failed to create Tool from schema: {e}"));
+
+    Tool {
+        name: "codex-status".to_string(),
+        title: Some("Codex Status".to_string()),
+        input_schema: tool_input_schema,
+        output_schema: None,
+        description: Some("Query basic status for a Codex session.".to_string()),
+        annotations: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

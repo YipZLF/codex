@@ -142,21 +142,16 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
     )
     .await??;
+    assert_eq!(codex_response.id, RequestId::Integer(codex_request_id));
+    let result = codex_response.result;
     assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(codex_request_id),
-            result: json!({
-                "content": [
-                    {
-                        "text": "File created!",
-                        "type": "text"
-                    }
-                ]
-            }),
-        },
-        codex_response
+        result.get("content"),
+        Some(&json!([{ "text": "File created!", "type": "text" }]))
     );
+    // structured_content may include session_id
+    if let Some(sc) = result.get("structured_content") {
+        assert!(sc.get("session_id").is_some(), "expected session_id in structured_content");
+    }
 
     assert!(created_file.is_file(), "created file should exist");
 
@@ -283,21 +278,15 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
     )
     .await??;
+    assert_eq!(codex_response.id, RequestId::Integer(codex_request_id));
+    let result = codex_response.result;
     assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(codex_request_id),
-            result: json!({
-                "content": [
-                    {
-                        "text": "Patch has been applied successfully!",
-                        "type": "text"
-                    }
-                ]
-            }),
-        },
-        codex_response
+        result.get("content"),
+        Some(&json!([{ "text": "Patch has been applied successfully!", "type": "text" }]))
     );
+    if let Some(sc) = result.get("structured_content") {
+        assert!(sc.get("session_id").is_some(), "expected session_id in structured_content");
+    }
 
     let file_contents = std::fs::read_to_string(test_file.as_path())?;
     assert_eq!(file_contents, "modified content\n");
@@ -350,21 +339,15 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
     )
     .await??;
+    assert_eq!(codex_response.id, RequestId::Integer(codex_request_id));
+    let result = codex_response.result;
     assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(codex_request_id),
-            result: json!({
-                "content": [
-                    {
-                        "text": "Enjoy!",
-                        "type": "text"
-                    }
-                ]
-            }),
-        },
-        codex_response
+        result.get("content"),
+        Some(&json!([{ "text": "Enjoy!", "type": "text" }]))
     );
+    if let Some(sc) = result.get("structured_content") {
+        assert!(sc.get("session_id").is_some());
+    }
 
     let requests = server.received_requests().await.unwrap();
     let request = requests[0].body_json::<serde_json::Value>().unwrap();

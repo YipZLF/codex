@@ -281,6 +281,28 @@ impl McpProcess {
         Ok(request_id)
     }
 
+    /// Send a `tools/list` request.
+    pub async fn send_list_tools_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(mcp_types::ListToolsRequest::METHOD, None).await
+    }
+
+    /// Send a `tools/call` request for an arbitrary tool name and arguments.
+    pub async fn send_call_tool_request(
+        &mut self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<i64> {
+        let params = CallToolRequestParams {
+            name: name.to_string(),
+            arguments: Some(arguments),
+        };
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
     pub async fn send_response(
         &mut self,
         id: RequestId,

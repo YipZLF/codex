@@ -315,6 +315,11 @@ impl MessageProcessor {
             tools: vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
+                // M1: Additional control tools (aliases allowed at call time)
+                crate::codex_tool_config::create_tool_for_codex_tool_call_inject_param(),
+                crate::codex_tool_config::create_tool_for_codex_tool_call_interrupt_param(),
+                crate::codex_tool_config::create_tool_for_codex_tool_call_shutdown_param(),
+                crate::codex_tool_config::create_tool_for_codex_tool_call_status_param(),
             ],
             next_cursor: None,
         };
@@ -332,9 +337,27 @@ impl MessageProcessor {
         let CallToolRequestParams { name, arguments } = params;
 
         match name.as_str() {
+            // Existing tools
             "codex" => self.handle_tool_call_codex(id, arguments).await,
-            "codex-reply" => {
+            "codex-reply" | "codex.reply" => {
                 self.handle_tool_call_codex_session_reply(id, arguments)
+                    .await
+            }
+            // M1 tools (accept kebab-case and dotted aliases)
+            "codex-inject" | "codex.inject" => {
+                self.handle_tool_call_codex_session_inject(id, arguments)
+                    .await
+            }
+            "codex-interrupt" | "codex.interrupt" => {
+                self.handle_tool_call_codex_session_interrupt(id, arguments)
+                    .await
+            }
+            "codex-shutdown" | "codex.shutdown" => {
+                self.handle_tool_call_codex_session_shutdown(id, arguments)
+                    .await
+            }
+            "codex-status" | "codex.status" => {
+                self.handle_tool_call_codex_session_status(id, arguments)
                     .await
             }
             _ => {
@@ -426,6 +449,288 @@ impl MessageProcessor {
             )
             .await;
         });
+    }
+
+    // M1: Inject text into a session (implemented via the same path as reply;
+    // core will inject into an active task or start a new turn if idle).
+    async fn handle_tool_call_codex_session_inject(
+        &self,
+        request_id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let args: crate::codex_tool_config::CodexToolCallInjectParam =
+            match arguments.and_then(|v| serde_json::from_value(v).ok()) {
+                Some(a) => a,
+                None => {
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_string(),
+                            text: "Missing or invalid arguments for codex-inject".to_string(),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                        .await;
+                    return;
+                }
+            };
+
+        let session_id = match Uuid::try_from(args.session_id.as_str()) {
+            Ok(id) => id,
+            Err(_) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "Invalid sessionId (expected UUID)".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                    .await;
+                return;
+            }
+        };
+
+        let conversation = match self.conversation_manager.get_conversation(session_id).await {
+            Ok(conv) => conv,
+            Err(_) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Session not found: {session_id}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                    .await;
+                return;
+            }
+        };
+
+        let outgoing = self.outgoing.clone();
+        let running = self.running_requests_id_to_codex_uuid.clone();
+        task::spawn(async move {
+            crate::codex_tool_runner::run_codex_tool_session_reply(
+                conversation,
+                outgoing,
+                request_id,
+                args.prompt,
+                running,
+                session_id,
+            )
+            .await;
+        });
+    }
+
+    async fn handle_tool_call_codex_session_interrupt(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let args: crate::codex_tool_config::CodexToolCallSessionOnlyParam =
+            match arguments.and_then(|v| serde_json::from_value(v).ok()) {
+                Some(a) => a,
+                None => {
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_string(),
+                            text: "Missing or invalid arguments for codex-interrupt".to_string(),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(id, result)
+                        .await;
+                    return;
+                }
+            };
+
+        let session_id = match Uuid::try_from(args.session_id.as_str()) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "Invalid sessionId (expected UUID)".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
+        };
+
+        let codex_arc = match self.conversation_manager.get_conversation(session_id).await {
+            Ok(c) => c,
+            Err(_) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Session not found: {session_id}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
+        };
+
+        let sub_id = match &id {
+            RequestId::String(s) => s.clone(),
+            RequestId::Integer(n) => n.to_string(),
+        };
+        let _ = codex_arc
+            .submit_with_id(Submission {
+                id: sub_id,
+                op: codex_core::protocol::Op::Interrupt,
+            })
+            .await;
+
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                r#type: "text".to_string(),
+                text: "ok".to_string(),
+                annotations: None,
+            })],
+            is_error: None,
+            structured_content: None,
+        };
+        self.send_response::<mcp_types::CallToolRequest>(id, result)
+            .await;
+    }
+
+    async fn handle_tool_call_codex_session_shutdown(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let args: crate::codex_tool_config::CodexToolCallSessionOnlyParam =
+            match arguments.and_then(|v| serde_json::from_value(v).ok()) {
+                Some(a) => a,
+                None => {
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_string(),
+                            text: "Missing or invalid arguments for codex-shutdown".to_string(),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(id, result)
+                        .await;
+                    return;
+                }
+            };
+
+        let session_id = match Uuid::try_from(args.session_id.as_str()) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "Invalid sessionId (expected UUID)".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
+        };
+
+        let codex_arc = match self.conversation_manager.get_conversation(session_id).await {
+            Ok(c) => c,
+            Err(_) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Session not found: {session_id}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
+        };
+
+        let sub_id = match &id {
+            RequestId::String(s) => s.clone(),
+            RequestId::Integer(n) => n.to_string(),
+        };
+        let _ = codex_arc
+            .submit_with_id(Submission {
+                id: sub_id,
+                op: codex_core::protocol::Op::Shutdown,
+            })
+            .await;
+
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                r#type: "text".to_string(),
+                text: "ok".to_string(),
+                annotations: None,
+            })],
+            is_error: None,
+            structured_content: None,
+        };
+        self.send_response::<mcp_types::CallToolRequest>(id, result)
+            .await;
+    }
+
+    async fn handle_tool_call_codex_session_status(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let args: crate::codex_tool_config::CodexToolCallSessionOnlyParam =
+            match arguments.and_then(|v| serde_json::from_value(v).ok()) {
+                Some(a) => a,
+                None => {
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_string(),
+                            text: "Missing or invalid arguments for codex-status".to_string(),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(id, result)
+                        .await;
+                    return;
+                }
+            };
+
+        let exists = match Uuid::try_from(args.session_id.as_str()) {
+            Ok(uuid) => self
+                .conversation_manager
+                .get_conversation(uuid)
+                .await
+                .is_ok(),
+            Err(_) => false,
+        };
+
+        let result = serde_json::json!({ "exists": exists });
+        self.outgoing.send_response(id, result).await;
     }
 
     async fn handle_tool_call_codex_session_reply(

@@ -110,6 +110,7 @@ pub async fn run_codex_tool_session(
         outgoing,
         id,
         running_requests_id_to_codex_uuid,
+        Some(conversation_id),
     )
     .await;
 }
@@ -146,6 +147,7 @@ pub async fn run_codex_tool_session_reply(
         outgoing,
         request_id,
         running_requests_id_to_codex_uuid,
+        Some(session_id),
     )
     .await;
 }
@@ -155,6 +157,7 @@ async fn run_codex_tool_session_inner(
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    session_id: Option<Uuid>,
 ) {
     let request_id_str = match &request_id {
         RequestId::String(s) => s.clone(),
@@ -233,7 +236,9 @@ async fn run_codex_tool_session_inner(
                                 annotations: None,
                             })],
                             is_error: None,
-                            structured_content: None,
+                            structured_content: session_id.map(|sid| serde_json::json!({
+                                "session_id": sid,
+                            })),
                         };
                         outgoing.send_response(request_id.clone(), result).await;
                         // unregister the id so we don't keep it in the map
